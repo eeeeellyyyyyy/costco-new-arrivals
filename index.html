@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#176b45">
+<title>コストコ新商品チェッカー</title>
+<style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;color:#202820;background:#f5f7f5}
+*{box-sizing:border-box}body{margin:0}header{background:#176b45;color:white;padding:23px 18px}
+header small{opacity:.85}h1{font-size:22px;margin:7px 0}header p{margin:0;font-size:13px;opacity:.9}
+main{max-width:780px;margin:auto;padding:16px}.panel,.stat,.product{background:white;border-radius:14px;padding:14px;box-shadow:0 1px 5px #0000000b}
+.panel{margin-bottom:14px}.stats{display:flex;gap:10px;margin-bottom:14px}.stat{flex:1}.stat b{display:block;font-size:25px;color:#176b45}.stat span{font-size:12px;color:#657067}
+h2{font-size:16px;margin:0 0 10px}.muted{font-size:12px;color:#68736b;line-height:1.65}
+button,.filelabel{border:0;border-radius:10px;padding:11px 13px;background:#176b45;color:white;font-size:14px;cursor:pointer;display:inline-block}
+input[type=file]{display:none}.secondary{background:#eaf0eb;color:#24543b}
+.controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+input[type=text]{width:100%;padding:11px;border:1px solid #ccd5cd;border-radius:9px;font-size:14px;margin:7px 0}
+#status{padding:10px;border-radius:10px;background:#f0f5f1;font-size:13px;line-height:1.6;margin-top:10px}
+.list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.product{padding:12px}.product strong{display:block;font-size:14px;line-height:1.45;margin:5px 0}.product small{color:#69756c}.product a{color:#176b45;font-size:12px}
+.badge{font-size:10px;color:#176b45;font-weight:700}.empty{padding:20px;background:white;border-radius:12px;color:#68736b;font-size:13px}
+footer{text-align:center;color:#7b857d;font-size:11px;padding:25px}
+@media(min-width:600px){.list{grid-template-columns:repeat(3,minmax(0,1fr))}}
+</style>
+</head>
+<body>
+<header><small>COSTCO ONLINE / PERSONAL TOOL</small><h1>新商品チェッカー</h1><p>商品一覧を前回分と比較して、新しく加わった商品を見つけます</p></header>
+<main>
+  <div class="stats">
+    <div class="stat"><b id="newCount">0</b><span>今回の新着</span></div>
+    <div class="stat"><b id="totalCount">0</b><span>今回読み込んだ商品</span></div>
+  </div>
+  <section class="panel">
+    <h2>商品一覧CSVを読み込む</h2>
+    <p class="muted">商品データをCSVファイルで読み込みます。最初の読み込みは「前回分の登録」、2回目以降は前回と比較して新商品を表示します。</p>
+    <label class="filelabel" for="csvFile">CSVファイルを選ぶ</label>
+    <input id="csvFile" type="file" accept=".csv,text/csv">
+    <div class="controls">
+      <button id="template" class="secondary">CSV見本をダウンロード</button>
+      <button id="reset" class="secondary">比較データをリセット</button>
+    </div>
+    <div id="status" role="status">まだ商品データは読み込まれていません。</div>
+  </section>
+  <section class="panel">
+    <h2>新しく追加された商品</h2>
+    <p class="muted">商品番号（product_id）を基準に比較します。商品番号がない場合は商品名を使います。</p>
+    <div id="newItems" class="list"><div class="empty">CSVを読み込むと、ここに新着商品が表示されます。</div></div>
+  </section>
+  <section class="panel">
+    <h2>今回の一覧</h2>
+    <div id="allItems" class="list"><div class="empty">商品データはまだありません。</div></div>
+  </section>
+  <p class="muted">試作版 v0.2。CSVを読み込んで差分を比較する機能です。コストコ公式サイトへの自動アクセス、毎日の自動実行、プッシュ通知はまだ接続していません。</p>
+</main>
+<footer>データはこのブラウザ内に保存されます。別の端末・ブラウザとは同期しません。</footer>
+<script>
+const KEY="costco_snapshot_v2";
+let current=[];
+let fresh=[];
+function parseCSV(text){
+  const rows=[];let row=[],field="",quoted=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i],n=text[i+1];
+    if(c==='"'&&quoted&&n==='"'){field+='"';i++}
+    else if(c==='"'){quoted=!quoted}
+    else if(c===','&&!quoted){row.push(field);field=""}
+    else if((c==='\n'||c==='\r')&&!quoted){
+      if(c==='\r'&&n==='\n')i++;
+      row.push(field);if(row.some(x=>x.trim()))rows.push(row);row=[];field="";
+    } else field+=c;
+  }
+  row.push(field);if(row.some(x=>x.trim()))rows.push(row);
+  if(!rows.length)return [];
+  const headers=rows.shift().map(x=>x.trim().toLowerCase());
+  return rows.map(r=>Object.fromEntries(headers.map((h,i)=>[h,(r[i]||"").trim()])))
+    .filter(x=>x.product_id||x.name);
+}
+function key(p){return p.product_id||p.name.toLowerCase()}
+function card(p,isNew){
+ const name=escapeHtml(p.name||"商品名未入力");
+ const price=escapeHtml(p.price||"価格未登録");
+ const image=p.image_url&&/^https?:\/\//i.test(p.image_url)?`<img src="${escapeAttr(p.image_url)}" alt="" style="width:100%;height:100%;object-fit:contain">`:"<span>🛍️</span>";
+ const link=p.url&&/^https?:\/\//i.test(p.url)?`<a href="${escapeAttr(p.url)}" target="_blank" rel="noopener">商品ページを開く ↗</a>`:"";
+ return `<article class="product"><div style="height:105px;background:#edf1ed;border-radius:9px;display:grid;place-items:center;overflow:hidden">${image}</div><div class="badge">${isNew?"NEW":"商品"}</div><strong>${name}</strong><small>${price}</small><div>${link}</div></article>`;
+}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+function escapeAttr(s){return escapeHtml(s)}
+function render(){
+ document.getElementById("newCount").textContent=fresh.length;
+ document.getElementById("totalCount").textContent=current.length;
+ document.getElementById("newItems").innerHTML=fresh.length?fresh.map(p=>card(p,true)).join(""):'<div class="empty">新しく追加された商品はありません。</div>';
+ document.getElementById("allItems").innerHTML=current.length?current.map(p=>card(p,false)).join(""):'<div class="empty">商品データはまだありません。</div>';
+}
+document.getElementById("csvFile").addEventListener("change",async e=>{
+ const file=e.target.files[0];if(!file)return;
+ try{
+  const text=await file.text();const imported=parseCSV(text);
+  if(!imported.length)throw new Error("商品データが見つかりません。CSV見本の列名を確認してください。");
+  const previous=JSON.parse(localStorage.getItem(KEY)||"null");
+  current=imported;
+  if(!previous){
+   fresh=[];localStorage.setItem(KEY,JSON.stringify(current));
+   document.getElementById("status").textContent=`${current.length}件を前回分として登録しました。次回のCSV読み込みから新商品を比較できます。`;
+  }else{
+   const old=new Set(previous.map(key));
+   fresh=current.filter(p=>!old.has(key(p)));
+   localStorage.setItem(KEY,JSON.stringify(current));
+   document.getElementById("status").textContent=`前回 ${previous.length}件 → 今回 ${current.length}件。新着商品は ${fresh.length}件です。今回の一覧を次回の比較基準として保存しました。`;
+  }
+  render();
+ }catch(err){document.getElementById("status").textContent="読み込みエラー："+err.message}
+ e.target.value="";
+});
+document.getElementById("template").addEventListener("click",()=>{
+ const csv='product_id,name,price,url,image_url\n100001,サンプル商品A,1980,https://www.costco.co.jp/,https://example.com/image-a.jpg\n100002,サンプル商品B,2480,,\n';
+ const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"});
+ const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="costco_products_sample.csv";a.click();URL.revokeObjectURL(a.href);
+});
+document.getElementById("reset").addEventListener("click",()=>{
+ if(confirm("保存した前回の商品一覧を削除しますか？")){localStorage.removeItem(KEY);current=[];fresh=[];render();document.getElementById("status").textContent="比較データをリセットしました。次のCSVが前回分として登録されます。"}
+});
+</script>
+</body></html>
